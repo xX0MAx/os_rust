@@ -24,7 +24,7 @@ cargo bootimage
 
 Для того, чтобы запустить в QEMU введите команду:
 ```
-qemu-system-x86_64 -rtc base=utc -drive format=raw,file=target/x86_64-test_os/debug/bootimage-test_os.bin
+qemu-system-x86_64 -rtc base=localtime -drive format=raw,file=target/x86_64-test_os/debug/bootimage-test_os.bin
 ```
 ## Дополнительно
 Большая часть кода взята из [блога Филиппа Оппермана](https://os.phil-opp.com/), если тема разработки ОС заинтересовала, перейдите обязательно к нему, там много теоретической информации изложенной доступным языком.
