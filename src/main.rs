@@ -4,7 +4,15 @@
 extern crate alloc;
 
 use core::panic::PanicInfo;
-use test_os::{println, print, println_colored, print_colored, vga_buffer::Color, shell::shell_loop, ramfs::Node};
+use test_os::{
+    println, 
+    print, 
+    println_colored, 
+    print_colored, 
+    vga_buffer::Color, 
+    shell::shell_loop, 
+    ramfs::Node,
+};
 use bootloader::{BootInfo, entry_point};
 
 entry_point!(kernel_main);
@@ -24,7 +32,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 
     Node::init_fs();
 
-    println_colored!(Color::LightCyan, Color::Black, "        Hello!");
+    println_colored!(Color::LightCyan, Color::Black, "\n        Hello!");
     print!("    It's test OS on Rust by ");
     print_colored!(Color::Magenta, Color::Black,"xX0MAx");
     println!(".");

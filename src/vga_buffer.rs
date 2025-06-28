@@ -1,6 +1,7 @@
 use core::fmt;
 use spin::Mutex;
 use lazy_static::lazy_static;
+use alloc::vec::Vec;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +25,10 @@ pub enum Color {
     White = 15,
 }
 
+const BUFFER_HEIGHT: usize = 25;
+const BUFFER_WIDTH: usize = 80;
+const INPUT_BUFFER_SIZE: usize = 100;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 struct ColorCode(u8);
@@ -41,19 +46,80 @@ struct ScreenChar {
     color_code: ColorCode,
 }
 
-const BUFFER_HEIGHT: usize = 25;
-const BUFFER_WIDTH: usize = 80;
-
 #[repr(transparent)]
 struct Buffer {
     chars: [[ScreenChar; BUFFER_WIDTH]; BUFFER_HEIGHT],
 }
 
-const INPUT_BUFFER_SIZE: usize = 1024;
-
 pub struct InputBuffer {
     buf: [u8; INPUT_BUFFER_SIZE],
     len: usize,
+}
+
+pub struct UpBuffer {
+    lines: Vec<[ScreenChar; BUFFER_WIDTH]>,
+    max_lines: usize,
+}
+
+pub struct DownBuffer {
+    lines: Vec<[ScreenChar; BUFFER_WIDTH]>,
+    max_lines: usize,
+}
+
+impl UpBuffer {
+    pub fn new(max_history: usize) -> Self {
+        Self {
+            lines: Vec::with_capacity(max_history),
+            max_lines: max_history,
+        }
+    }
+    
+    pub fn push_line(&mut self, line: [ScreenChar; BUFFER_WIDTH]) {
+        if self.lines.len() >= self.max_lines {
+            self.lines.remove(0);
+        }
+        self.lines.push(line);
+    }
+    
+    pub fn pop_line(&mut self) -> Option<[ScreenChar; BUFFER_WIDTH]> {
+        self.lines.pop()
+    }
+    
+    pub fn is_empty(&self) -> bool {
+        self.lines.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.lines.clear();
+    }
+}
+
+impl DownBuffer {
+    pub fn new(max_history: usize) -> Self {
+        Self {
+            lines: Vec::with_capacity(max_history),
+            max_lines: max_history,
+        }
+    }
+    
+    pub fn push_line(&mut self, line: [ScreenChar; BUFFER_WIDTH]) {
+        if self.lines.len() >= self.max_lines {
+            self.lines.remove(0);
+        }
+        self.lines.push(line);
+    }
+    
+    pub fn pop_line(&mut self) -> Option<[ScreenChar; BUFFER_WIDTH]> {
+        self.lines.pop()
+    }
+    
+    pub fn is_empty(&self) -> bool {
+        self.lines.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.lines.clear();
+    }
 }
 
 impl InputBuffer {
@@ -86,6 +152,9 @@ pub struct Writer {
     color_code: ColorCode,
     buffer: &'static mut Buffer,
     buffer_string: InputBuffer,
+    up_buffer: UpBuffer,
+    down_buffer: DownBuffer,
+    write_row: isize,
 }
 
 impl Writer {
@@ -102,20 +171,48 @@ impl Writer {
             color_code: ColorCode::new(Color::White, Color::Black),
             buffer: unsafe { &mut *(0xb8000 as *mut Buffer) },
             buffer_string: InputBuffer::new(),
+            up_buffer: UpBuffer::new(100),
+            down_buffer: DownBuffer::new(100),
+            write_row: 0,
+        }
+    }
+
+    pub fn plus_write_row(&mut self){
+        self.write_row += 1;
+    }
+
+    pub fn minus_write_row(&mut self){
+        self.write_row -= 1;
+    }
+
+    pub fn check_write_row(&mut self){
+        if (self.write_row <= 1 || self.write_row as usize == usize::MAX){
+            while self.write_row <= 1 {
+                self.scroll_up();
+                self.write_row += 1;
+            }
+        }
+        if self.write_row as usize >= BUFFER_HEIGHT{
+            while self.write_row as usize >= BUFFER_HEIGHT {
+            self.scroll_down();
+            self.write_row -= 1;
+            }
         }
     }
 
     pub fn write_byte(&mut self, byte: u8) {
         match byte {
             b'\n' => {
+                self.check_write_row();
                 self.new_line();
                 self.buffer_string.push_byte(b'\n');
             }
             0x20..=0x7e => {
+                self.check_write_row();
                 if self.column_position >= BUFFER_WIDTH {
                     self.new_line();
                 }
-                let row = self.row_position;
+                let row = self.write_row as usize;
                 let col = self.column_position;
                 let color_code = self.color_code;
                 self.buffer.chars[row][col] = ScreenChar {
@@ -126,10 +223,11 @@ impl Writer {
                 self.buffer_string.push_byte(byte);
             }
             _ => {
+                self.check_write_row();
                 if self.column_position >= BUFFER_WIDTH {
                     self.new_line();
                 }
-                let row = self.row_position;
+                let row = self.write_row as usize;
                 let col = self.column_position;
                 let color_code = self.color_code;
                 self.buffer.chars[row][col] = ScreenChar {
@@ -142,18 +240,57 @@ impl Writer {
         }
     }
 
-    pub fn new_line(&mut self) {
-        self.column_position = 0;
-        self.row_position += 1;
+    pub fn scroll_up(&mut self) {
+        self.up_buffer.push_line(self.buffer.chars[BUFFER_HEIGHT-1]);
+        for row in (0..BUFFER_HEIGHT-1).rev() {
+            for col in 0..BUFFER_WIDTH {
+                self.buffer.chars[row + 1][col] = self.buffer.chars[row][col];
+            }
+        }
+    
+        self.clear_row(0);
+    
+        if self.row_position < BUFFER_HEIGHT - 1 {
+            self.row_position += 1;
+        }
+        if let Some(line) = self.down_buffer.pop_line() {
+            self.buffer.chars[0] = line;
+        } else {
+            self.clear_row(0);
+        }
+    }
 
-        if self.row_position >= BUFFER_HEIGHT {
+    pub fn scroll_down(&mut self){
+        self.down_buffer.push_line(self.buffer.chars[0]);
+        for row in 1..BUFFER_HEIGHT {
+            for col in 0..BUFFER_WIDTH {
+                self.buffer.chars[row - 1][col] = self.buffer.chars[row][col];
+             }
+        }    
+
+        self.clear_row(BUFFER_HEIGHT - 1);
+
+        self.row_position = BUFFER_HEIGHT - 1;
+        if let Some(line) = self.up_buffer.pop_line() {
+            self.buffer.chars[BUFFER_HEIGHT - 1] = line;
+        } else {
+            self.clear_row(BUFFER_HEIGHT - 1);
+        }
+    }
+
+    pub fn new_line(&mut self) {
+        self.down_buffer.push_line(self.buffer.chars[0]);
+        self.column_position = 0;
+        self.write_row += 1;
+
+        if self.write_row as usize >= BUFFER_HEIGHT {
             for row in 1..BUFFER_HEIGHT {
                 for col in 0..BUFFER_WIDTH {
                     self.buffer.chars[row - 1][col] = self.buffer.chars[row][col];
                 }
             }
             self.clear_row(BUFFER_HEIGHT - 1);
-            self.row_position = BUFFER_HEIGHT - 1;
+            self.write_row = (BUFFER_HEIGHT - 1) as isize;
         }
     }
 
@@ -177,27 +314,32 @@ impl Writer {
     }
 
     pub fn clear_screen(&mut self) {
+        self.check_write_row();
         for row in 0..BUFFER_HEIGHT {
             self.clear_row(row);
         }
         self.column_position = 0;
         self.row_position = 0;
         self.buffer_string.clear();
+        self.up_buffer.clear();
+        self.down_buffer.clear();
+        self.write_row = 1;
     }
 
     pub fn backspace(&mut self) {
-        if self.column_position == 0 && self.row_position == 0 {
+        self.check_write_row();
+        if self.column_position == 0 && self.write_row == 0 {
             return;
         }
 
         if self.column_position == 0 {
-            self.row_position -= 1;
+            self.write_row -= 1;
             self.column_position = BUFFER_WIDTH - 1;
         } else {
             self.column_position -= 1;
         }
 
-        self.buffer.chars[self.row_position][self.column_position] = ScreenChar {
+        self.buffer.chars[self.write_row as usize][self.column_position] = ScreenChar {
             ascii_character: b' ',
             color_code: self.color_code,
         };
@@ -239,6 +381,9 @@ lazy_static! {
         color_code: ColorCode::new(Color::White, Color::Black),
         buffer: unsafe { &mut *(0xb8000 as *mut Buffer) },
         buffer_string: InputBuffer::new(),
+        up_buffer: UpBuffer::new(100),
+        down_buffer: DownBuffer::new(100),
+        write_row: 0,
     });
 }
 

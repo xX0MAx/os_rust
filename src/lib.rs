@@ -20,7 +20,9 @@ pub fn init() {
 
     unsafe { interrupts::PICS.lock().initialize() };
 
-    unsafe { interrupts::PICS.lock().write_masks(0xFD, 0xFF) };
+    unsafe { interrupts::PICS.lock().write_masks(0x00, 0x00) };
+
+    interrupts::init_mouse();
 
     syscalls::init_syscall();
 

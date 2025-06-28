@@ -1,8 +1,10 @@
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
-use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
+use x86_64::{
+    structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode},
+    instructions::port::Port,
+};
 use spin::Mutex;
-use x86_64::instructions::port::Port;
 
 use crate::{gdt, hlt_loop, println};
 use crate::vga_buffer::WRITER;
@@ -25,6 +27,8 @@ lazy_static! {
                 .set_handler_fn(keyboard_interrupt_handler);
             idt.page_fault
                 .set_handler_fn(page_fault_handler);
+            idt[InterruptIndex::Mouse.as_usize()]
+                .set_handler_fn(mouse_interrupt_handler);
         }
         idt
     };
@@ -54,6 +58,7 @@ pub static PICS: spin::Mutex<ChainedPics> =
 pub enum InterruptIndex {
     Timer = PIC_1_OFFSET,
     Keyboard,
+    Mouse = PIC_2_OFFSET + 4,
 }
 
 impl InterruptIndex {
@@ -135,4 +140,127 @@ extern "x86-interrupt" fn page_fault_handler(
     println!("Error Code: {:?}", error_code);
     println!("{:#?}", stack_frame);
     hlt_loop();
+}
+
+lazy_static! {
+    static ref MOUSE_PACKET: Mutex<[u8; 4]> = Mutex::new([0; 4]);
+    static ref MOUSE_PACKET_INDEX: Mutex<usize> = Mutex::new(0);
+}
+
+extern "x86-interrupt" fn mouse_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    let mut port = Port::new(0x60);
+    let data: u8 = unsafe { port.read() };
+
+    let mut packet = MOUSE_PACKET.lock();
+    let mut index = MOUSE_PACKET_INDEX.lock();
+
+    if *index == 0 {
+        if data & 0x08 == 0 {
+            *index = 0;
+            unsafe {
+                PICS.lock().notify_end_of_interrupt(InterruptIndex::Mouse.as_u8());
+            }
+            return;
+        }
+    }
+
+    packet[*index] = data;
+    *index += 1;
+
+    if *index == 4 {
+        /*
+        let left = packet[0] & 0x1 != 0; press LMB
+        let right = packet[0] & 0x2 != 0; press RMB
+        let middle = packet[0] & 0x4 != 0; press Wheel
+        */
+        let wheel = packet[3] as i8;
+        let mut writer = WRITER.lock();
+
+        match wheel{
+            -1 => {
+                writer.scroll_up();
+                writer.plus_write_row();
+            }
+            1 => {
+                writer.scroll_down();
+                writer.minus_write_row();
+            }
+            _ => {}
+        }
+
+        *index = 0;
+    }
+
+    unsafe {
+        PICS.lock().notify_end_of_interrupt(InterruptIndex::Mouse.as_u8());
+    }
+}
+
+pub fn init_mouse() {
+    let mut command_port = Port::new(0x64);
+    let mut data_port = Port::new(0x60);
+
+    wait_input_buffer_empty();
+    unsafe { command_port.write(0xA8u8); }
+
+    wait_input_buffer_empty();
+    unsafe { command_port.write(0x20u8); }
+    wait_output_buffer_full();
+    let status = unsafe { data_port.read() } | 0x02;
+    wait_input_buffer_empty();
+    unsafe { command_port.write(0x60u8); }
+    wait_input_buffer_empty();
+    unsafe { data_port.write(status); }
+
+    wait_input_buffer_empty();
+    unsafe { command_port.write(0xD4u8); }
+    wait_input_buffer_empty();
+    unsafe { data_port.write(0xF4u8); }
+    wait_output_buffer_full();
+    
+    send_mouse_command(0xF4);
+
+    send_mouse_command_with_data(0xF3, 200);
+    send_mouse_command_with_data(0xF3, 100);
+    send_mouse_command_with_data(0xF3, 80);
+
+    send_mouse_command(0xF2);
+    wait_output_buffer_full();
+}
+
+fn send_mouse_command(cmd: u8) {
+    let mut command_port = Port::new(0x64);
+    let mut data_port = Port::new(0x60);
+    wait_input_buffer_empty();
+    unsafe { command_port.write(0xD4u8); }
+    wait_input_buffer_empty();
+    unsafe { data_port.write(cmd); }
+    wait_output_buffer_full();
+    let ack = unsafe { data_port.read() };
+}
+
+fn send_mouse_command_with_data(cmd: u8, data: u8) {
+    send_mouse_command(cmd);
+    send_mouse_command(data);
+}
+
+
+fn wait_input_buffer_empty() {
+    let mut status_port = Port::new(0x64);
+    loop {
+        let status: u8 = unsafe { status_port.read() };
+        if status & 0x02 == 0 {
+            break;
+        }
+    }
+}
+
+fn wait_output_buffer_full() {
+    let mut status_port = Port::new(0x64);
+    loop {
+        let status: u8 = unsafe { status_port.read() };
+        if status & 0x01 != 0 {
+            break;
+        }
+    }
 }

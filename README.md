@@ -14,6 +14,13 @@ ___
  
 </details>
 
+<details>
+<summary>Список апдейтов:</summary>
+
++ Update v0.0.1 - Добавлена обработка мыши, теперь можно листать терминал вверх и вниз
+ 
+</details>
+
 ## Сборка и запуск
 Для того, чтобы собрать проект, перейдите в его директорию и введите в терминал команду
 ( :exclamation:__Используйте nightly rust__:exclamation: ):
@@ -24,7 +31,7 @@ cargo bootimage
 
 Для того, чтобы запустить в QEMU введите команду:
 ```
-qemu-system-x86_64 -rtc base=utc -drive format=raw,file=target/x86_64-test_os/debug/bootimage-test_os.bin
+qemu-system-x86_64 -rtc base=localtime -drive format=raw,file=target/x86_64-test_os/debug/bootimage-test_os.bin
 ```
 ## Дополнительно
 Большая часть кода взята из [блога Филиппа Оппермана](https://os.phil-opp.com/), если тема разработки ОС заинтересовала, перейдите обязательно к нему, там много теоретической информации изложенной доступным языком.
