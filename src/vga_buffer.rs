@@ -1,7 +1,7 @@
 use core::fmt;
 use spin::Mutex;
 use lazy_static::lazy_static;
-use alloc::vec::Vec;
+use alloc::{vec::Vec, string::String};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,6 +63,11 @@ pub struct UpBuffer {
 
 pub struct DownBuffer {
     lines: Vec<[ScreenChar; BUFFER_WIDTH]>,
+    max_lines: usize,
+}
+
+pub struct HistoryBuffer {
+    lines: Vec<String>,
     max_lines: usize,
 }
 
@@ -146,6 +151,30 @@ impl InputBuffer {
     }
 }
 
+impl HistoryBuffer {
+    pub fn new(max_history: usize) -> Self {
+        Self {
+            lines: Vec::with_capacity(max_history),
+            max_lines: max_history,
+        }
+    }
+    
+    pub fn push_line(&mut self, line: String) {
+        if self.lines.len() == self.max_lines {
+            self.lines.remove(0);
+        }
+        self.lines.push(line);
+    }
+
+    pub fn pop_line(&mut self) -> Option<String> {
+        self.lines.pop()
+    }
+
+    pub fn get_line(&self, index: usize) -> Option<&String> {
+        self.lines.get(index)
+    }
+}
+
 pub struct Writer {
     column_position: usize,
     row_position: usize,
@@ -186,7 +215,7 @@ impl Writer {
     }
 
     pub fn check_write_row(&mut self){
-        if (self.write_row <= 1 || self.write_row as usize == usize::MAX){
+        if self.write_row <= 1 || self.write_row as usize == usize::MAX{
             while self.write_row <= 1 {
                 self.scroll_up();
                 self.write_row += 1;
@@ -279,7 +308,9 @@ impl Writer {
     }
 
     pub fn new_line(&mut self) {
-        self.down_buffer.push_line(self.buffer.chars[0]);
+        if self.write_row as usize >= BUFFER_HEIGHT - 1 {
+            self.down_buffer.push_line(self.buffer.chars[0]);
+        }
         self.column_position = 0;
         self.write_row += 1;
 
@@ -294,7 +325,7 @@ impl Writer {
         }
     }
 
-    fn clear_row(&mut self, row: usize) {
+    pub fn clear_row(&mut self, row: usize) {
         let blank = ScreenChar {
             ascii_character: b' ',
             color_code: self.color_code,
@@ -302,6 +333,14 @@ impl Writer {
         for col in 0..BUFFER_WIDTH {
             self.buffer.chars[row][col] = blank;
         }
+    }
+
+    pub fn get_write_row(&self) -> usize {
+        self.write_row as usize
+    }
+
+    pub fn write_col_null(&mut self) {
+        self.column_position = 0
     }
 
     pub fn write_string(&mut self, s: &str) {
@@ -328,24 +367,21 @@ impl Writer {
 
     pub fn backspace(&mut self) {
         self.check_write_row();
-        if self.column_position == 0 && self.write_row == 0 {
-            return;
-        }
-
-        if self.column_position == 0 {
-            self.write_row -= 1;
-            self.column_position = BUFFER_WIDTH - 1;
-        } else {
+        let delete_char = self.buffer.chars[self.write_row as usize][self.column_position - 2];
+        if delete_char.ascii_character != b'>' {
+            if self.column_position == 0 && self.write_row == 0 {
+                return;
+            }
             self.column_position -= 1;
-        }
 
-        self.buffer.chars[self.write_row as usize][self.column_position] = ScreenChar {
-            ascii_character: b' ',
-            color_code: self.color_code,
-        };
+            self.buffer.chars[self.write_row as usize][self.column_position] = ScreenChar {
+                ascii_character: b' ',
+                color_code: self.color_code,
+            };
 
-        if self.buffer_string.len > 0 {
-            self.buffer_string.len -= 1;
+            if self.buffer_string.len > 0 {
+                self.buffer_string.len -= 1;
+            }
         }
     }
 
@@ -403,7 +439,9 @@ pub fn _print(args: fmt::Arguments) {
     use core::fmt::Write;
     use x86_64::instructions::interrupts;
     interrupts::without_interrupts(|| {
-        WRITER.lock().write_fmt(args).unwrap();
+        let mut writer = WRITER.lock();
+        writer.check_write_row();
+        writer.write_fmt(args).unwrap();
     });
 }
 
@@ -414,6 +452,7 @@ pub fn print_colored(args: fmt::Arguments, fg: Color, bg: Color) {
     interrupts::without_interrupts(|| {
         let mut writer = WRITER.lock();
         writer.set_color(fg, bg);
+        writer.check_write_row();
         writer.write_fmt(args).unwrap();
         writer.set_color(Color::White, Color::Black);
     });

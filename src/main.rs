@@ -41,7 +41,6 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     println!(" to see available commands.");
 
     shell_loop();
-    test_os::hlt_loop();
 }
 
 #[cfg(not(test))]

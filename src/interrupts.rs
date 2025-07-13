@@ -13,6 +13,10 @@ pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
 
 pub static mut ENTER_PRESSED: bool = false;
+pub static mut UP_PRESSED: bool = false;
+pub static mut DOWN_PRESSED: bool = false;
+pub static mut LEFT_PRESSED: bool = false;
+pub static mut RIGHT_PRESSED: bool = false;
 
 lazy_static! {
     static ref IDT: InterruptDescriptorTable = {
@@ -75,6 +79,7 @@ extern "x86-interrupt" fn timer_interrupt_handler(
     _stack_frame: InterruptStackFrame)
 {
     //print!(".");
+
     unsafe {
         PICS.lock()
             .notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
@@ -115,8 +120,13 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(
                     }
                 }
                 DecodedKey::RawKey(key) => {
-                    if key == pc_keyboard::KeyCode::Backspace {
-                        WRITER.lock().backspace();
+                    match key {
+                        pc_keyboard::KeyCode::ArrowUp => unsafe {UP_PRESSED = true;},
+                        pc_keyboard::KeyCode::ArrowDown => unsafe {DOWN_PRESSED = true;},
+                        //pc_keyboard::KeyCode::ArrowLeft => unsafe {LEFT_PRESSED = true;},
+                        //pc_keyboard::KeyCode::ArrowRight => unsafe {RIGHT_PRESSED = true;},
+                        pc_keyboard::KeyCode::Backspace => {WRITER.lock().backspace();},
+                        _ => {}
                     }
                 }
             }

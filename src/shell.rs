@@ -1,14 +1,14 @@
 use crate::{println, print, println_colored, print_colored};
-use crate::vga_buffer::{WRITER, buffer_copy, buffer_clear, Color};
+use crate::vga_buffer::{WRITER, buffer_copy, buffer_clear, Color, HistoryBuffer};
 use crate::ramfs::{Node, CURRENT_DIR, ROOT_DIR, NodeRef};
 use alloc::{string::{String, ToString}, vec::Vec, rc::Rc, format};
 use core::arch::asm;
 
-use crate::interrupts::ENTER_PRESSED;
+use crate::interrupts::{ENTER_PRESSED, UP_PRESSED, DOWN_PRESSED};
 
 static mut DIR_STACK: Vec<NodeRef> = Vec::new();
 
-pub fn shell_loop(){
+pub fn shell_loop() -> ! {
     unsafe {
         if ROOT_DIR.is_none() {
             ROOT_DIR = Some(Node::new_dir());
@@ -22,15 +22,23 @@ pub fn shell_loop(){
     let current_dir = unsafe {
         CURRENT_DIR.as_ref().expect("File system not initialized").clone()
     };
+    let mut counter = 0;
+    let mut max_history = 0;
+    let mut history_command = HistoryBuffer::new(10);
     print_colored!(Color::Magenta, Color::Black,"\n/ > ");
     buffer_clear();
     loop {
         unsafe {
             if ENTER_PRESSED {
-            
                 let mut buf = [0u8; 256]; 
                 let len = buffer_copy(&mut buf);
                 let s = core::str::from_utf8(&buf[..len]).unwrap_or("<invalid utf8>");
+                history_command.push_line(s.trim_end_matches('\n').to_string());
+                
+                if max_history < 10{
+                    max_history += 1;
+                    counter = max_history;
+                }
 
                 execute_command(s);
                 ENTER_PRESSED = false;
@@ -39,6 +47,55 @@ pub fn shell_loop(){
                 print_colored!(Color::Magenta, Color::Black, "{}", path);
                 print_colored!(Color::Magenta, Color::Black, " > ");
                 buffer_clear();
+            }
+
+            else if UP_PRESSED{
+                if counter > 0 {
+                    counter -= 1;
+                }
+                let command = history_command.get_line(counter);
+
+                let mut writer = WRITER.lock();
+                writer.check_write_row();
+                let mut row = writer.get_write_row();
+                writer.clear_row(row);
+                writer.write_col_null();
+                drop(writer);
+
+                let path = get_path(&DIR_STACK);
+                print_colored!(Color::Magenta, Color::Black, "{}", path);
+                print_colored!(Color::Magenta, Color::Black, " > ");
+                buffer_clear();
+                if let Some(cmd) = command {
+                    print!("{}", cmd);
+                }
+                UP_PRESSED = false;
+            }
+
+            else if DOWN_PRESSED{
+                if counter < max_history {
+                    counter += 1;
+                }
+                let command = history_command.get_line(counter);
+                let mut writer = WRITER.lock();
+                writer.check_write_row();
+                let mut row = writer.get_write_row();
+                writer.clear_row(row);
+                writer.write_col_null();
+                drop(writer);
+                
+                let path = get_path(&DIR_STACK);
+                print_colored!(Color::Magenta, Color::Black, "{}", path);
+                print_colored!(Color::Magenta, Color::Black, " > ");
+                buffer_clear();
+                if let Some(cmd) = command {
+                    print!("{}", cmd);
+                }
+                DOWN_PRESSED = false;
+            }
+
+            else{
+                x86_64::instructions::hlt();
             }
         }
     }
@@ -111,8 +168,9 @@ pub fn execute_command(command: &str) {
             let m = inb(0x71);
             outb(0x70, 0x09);
             let y = inb(0x71);
-            println!("{:02x}:{:02x}", h, min);
-            println!("{:02x}.{:02x}.{:02x}", d, m, y);
+
+            println!("    {:02x}:{:02x}", h, min);
+            println!("    {:02x}.{:02x}.{:02x}", d, m, y);
         },
         "mkdir" => {
             if let Some(name) = parts.next() {
@@ -282,8 +340,8 @@ pub fn execute_command(command: &str) {
             }
         }
         "hi" | "hello" | "hi!" | "hello!" => {
-            println_colored!(Color::Yellow, Color::Black, "hi broooooooo!");
-            println_colored!(Color::Yellow, Color::Black, "you nice, good luck!!!");
+            println_colored!(Color::Yellow, Color::Black, "Hi broooooooo!");
+            println_colored!(Color::Yellow, Color::Black, "You nice, good luck!!!");
         },
         _ => {
             println_colored!(Color::Red, Color::Black,"Unknown command: {}", command);
